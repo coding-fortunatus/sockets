@@ -62,10 +62,21 @@ class GameSocket
         self::$config['password'] = $_ENV['DB_PASSWORD'];
 
         if ($_ENV['APP_ENV'] === 'production') {
-            self::$config['options'][PDO::MYSQL_ATTR_SSL_CA] = 'App/BaltimoreCyberTrustRoot.crt.pem';
-            self::$config['options'][PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = false;
+            // Use the full path to the certificate
+            $certPath = __DIR__ . '/BaltimoreCyberTrustRoot.crt.pem';
+            if (file_exists($certPath)) {
+                self::$config['options'][PDO::MYSQL_ATTR_SSL_CA] = $certPath;
+                self::$config['options'][PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] = false;
+            } else {
+                echo "Warning: SSL certificate file not found at {$certPath}\n";
+            }
         }
 
+        $this->connectToDatabase();
+    }
+
+    private function connectToDatabase()
+    {
         try {
             $dsn = self::$config['driver'] . ":host=" . self::$config['host'] . ";port=" . self::$config['port'] . ";dbname=" . self::$config['dbname'] . ";charset=utf8mb4";
             $this->db = new PDO($dsn, self::$config['user'], self::$config['password'], self::$config['options']);
@@ -73,6 +84,21 @@ class GameSocket
         } catch (PDOException $e) {
             echo "Database Connection Failed: " . $e->getMessage() . "\n";
             exit;
+        }
+    }
+
+    private function ensureDbConnection()
+    {
+        try {
+            // Check if connection is still alive
+            if (!$this->db || !$this->db->query('SELECT 1')) {
+                // Reconnect if query fails
+                $this->connectToDatabase();
+            }
+        } catch (PDOException $e) {
+            echo "Database connection check failed: " . $e->getMessage() . "\n";
+            // Reconnect
+            $this->connectToDatabase();
         }
     }
 
@@ -94,52 +120,63 @@ class GameSocket
         $player_id = (int)$params['player_id'];
         $game_id = (int)$params['game_id'];
 
-        $query = $this->db->query("SELECT * FROM games_players WHERE gameId={$game_id} AND userId={$player_id}", PDO::FETCH_DEFAULT);
-        $query->execute();
-        $result = $query->fetch(PDO::FETCH_OBJ);
-        if (!$result) {
-            echo "\nInvalid game or player ID provided";
+        try {
+            // Ensure database connection is active before querying
+            $this->ensureDbConnection();
+
+            // Use prepared statements to prevent SQL injection
+            $stmt = $this->db->prepare("SELECT * FROM games_players WHERE gameId = ? AND userId = ?");
+            $stmt->execute([$game_id, $player_id]);
+            $result = $stmt->fetch(PDO::FETCH_OBJ);
+
+            if (!$result) {
+                echo "\nInvalid game or player ID provided";
+                $server->close($request->fd);
+                return;
+            }
+
+            // Store connection in the shared table
+            $this->connectionTable->set($request->fd, [
+                'game_id' => $game_id,
+                'player_id' => $player_id
+            ]);
+
+            // Update or initialize game info
+            if (!$this->gameTable->exists($game_id)) {
+                $this->gameTable->set($game_id, [
+                    'player_count' => 1,
+                    'active' => 1
+                ]);
+            } else {
+                $gameInfo = $this->gameTable->get($game_id);
+                $this->gameTable->set($game_id, [
+                    'player_count' => $gameInfo['player_count'] + 1,
+                    'active' => 1
+                ]);
+            }
+
+            // Log connection info
+            echo "\nPlayer {$player_id} connected to game {$game_id} with fd {$request->fd}";
+            $this->printConnectionStatus();
+
+            // Notify player on successful connection
+            $server->push($request->fd, json_encode([
+                'status' => 'Connected',
+                'message' => "Player connected to game {$game_id}",
+            ]));
+
+            // Broadcast to other players about the new connection
+            $this->broadcastToGame($server, $game_id, [
+                'action' => 'playerConnected',
+                'status' => 'connection',
+                'player_id' => $player_id,
+                'message' => "New player {$player_id} connected"
+            ], $request->fd);
+        } catch (PDOException $e) {
+            echo "\nDatabase error during connection: " . $e->getMessage();
             $server->close($request->fd);
             return;
         }
-
-        // Store connection in the shared table
-        $this->connectionTable->set($request->fd, [
-            'game_id' => $game_id,
-            'player_id' => $player_id
-        ]);
-
-        // Update or initialize game info
-        if (!$this->gameTable->exists($game_id)) {
-            $this->gameTable->set($game_id, [
-                'player_count' => 1,
-                'active' => 1
-            ]);
-        } else {
-            $gameInfo = $this->gameTable->get($game_id);
-            $this->gameTable->set($game_id, [
-                'player_count' => $gameInfo['player_count'] + 1,
-                'active' => 1
-            ]);
-        }
-
-        // Log connection info
-        echo "\nPlayer {$player_id} connected to game {$game_id} with fd {$request->fd}";
-        $this->printConnectionStatus();
-
-        // Notify player on successful connection
-        $server->push($request->fd, json_encode([
-            'status' => 'Connected',
-            'message' => "Player connected to game {$game_id}",
-        ]));
-
-        // Broadcast to other players about the new connection
-        $this->broadcastToGame($server, $game_id, [
-            'action' => 'playerConnected',
-            'status' => 'connection',
-            'player_id' => $player_id,
-            'message' => "New player {$player_id} connected"
-        ], $request->fd);
     }
 
     public function onMessage(Server $server, Frame $frame)
