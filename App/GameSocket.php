@@ -7,6 +7,7 @@ require_once __DIR__ . '/../vendor/autoload.php';
 use OpenSwoole\Http\Request;
 use OpenSwoole\WebSocket\Frame;
 use OpenSwoole\WebSocket\Server;
+use OpenSwoole\Table;
 use PDO;
 use Dotenv\Dotenv;
 use PDOException;
@@ -17,7 +18,10 @@ $dotenv->load();
 class GameSocket
 {
     private PDO $db;
-    private array $connections = [];
+    protected Server $server;
+    protected Table $connectionTable;
+    protected Table $gameTable;
+
     private static array $config = [
         'host' => '',
         'dbname' => '',
@@ -30,11 +34,26 @@ class GameSocket
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         ],
     ];
-    private Server $server;
+
     public function __construct()
     {
+        // Create shared table for connection tracking
+        $this->connectionTable = new Table(1024);
+        $this->connectionTable->column('game_id', Table::TYPE_INT);
+        $this->connectionTable->column('player_id', Table::TYPE_INT);
+        $this->connectionTable->create();
+
+        // Create shared table for game tracking
+        $this->gameTable = new Table(256);
+        $this->gameTable->column('player_count', Table::TYPE_INT);
+        $this->gameTable->column('active', Table::TYPE_INT, 1); // 1 = active, 0 = inactive
+        $this->gameTable->create();
+
         // Initialize Open Swoole Server
-        $this->server = new Server('0.0.0.0', 9001);
+        $this->server = new Server('0.0.0.0', 9002);
+        $this->server->on('open', [$this, "onOpen"]);
+        $this->server->on('message', [$this, "onMessage"]);
+        $this->server->on('close', [$this, "onClose"]);
 
         self::$config['host'] = $_ENV['DB_HOST'];
         self::$config['port']     = $_ENV['DB_PORT'];
@@ -55,10 +74,6 @@ class GameSocket
             echo "Database Connection Failed: " . $e->getMessage() . "\n";
             exit;
         }
-
-        $this->server->on('open', [$this, "onOpen"]);
-        $this->server->on('message', [$this, "onMessage"]);
-        $this->server->on('close', [$this, "onClose"]);
     }
 
     public function onOpen(Server $server, Request $request)
@@ -76,52 +91,80 @@ class GameSocket
             return;
         }
         // Initialize and set the params
-        $player_id = $params['player_id'];
-        $game_id   = $params['game_id'];
+        $player_id = (int)$params['player_id'];
+        $game_id = (int)$params['game_id'];
 
-        $query = $this->db->query("SELECT * FROM games_players WHERE gameId={$game_id}", PDO::FETCH_DEFAULT);
+        $query = $this->db->query("SELECT * FROM games_players WHERE gameId={$game_id} AND userId={$player_id}", PDO::FETCH_DEFAULT);
         $query->execute();
         $result = $query->fetch(PDO::FETCH_OBJ);
-        if ($result->userId != $player_id) {
+        if (!$result) {
             echo "\nInvalid game or player ID provided";
             $server->close($request->fd);
             return;
         }
 
-        // Check if the game exist already and store playerId, else otherwise
-        if (!isset($this->connections[$game_id])) {
-            $this->connections[$game_id] = [];
+        // Store connection in the shared table
+        $this->connectionTable->set($request->fd, [
+            'game_id' => $game_id,
+            'player_id' => $player_id
+        ]);
+
+        // Update or initialize game info
+        if (!$this->gameTable->exists($game_id)) {
+            $this->gameTable->set($game_id, [
+                'player_count' => 1,
+                'active' => 1
+            ]);
+        } else {
+            $gameInfo = $this->gameTable->get($game_id);
+            $this->gameTable->set($game_id, [
+                'player_count' => $gameInfo['player_count'] + 1,
+                'active' => 1
+            ]);
         }
-        $this->connections[$game_id][$player_id] = $request->fd;
-        // Notify player on a successful connection
+
+        // Log connection info
+        echo "\nPlayer {$player_id} connected to game {$game_id} with fd {$request->fd}";
+        $this->printConnectionStatus();
+
+        // Notify player on successful connection
         $server->push($request->fd, json_encode([
             'status' => 'Connected',
-            'message' => "Player connected to {$game_id}",
+            'message' => "Player connected to game {$game_id}",
         ]));
 
-        $this->broadcast($server, $game_id, [
+        // Broadcast to other players about the new connection
+        $this->broadcastToGame($server, $game_id, [
+            'action' => 'playerConnected',
             'status' => 'connection',
+            'player_id' => $player_id,
             'message' => "New player {$player_id} connected"
         ], $request->fd);
     }
 
     public function onMessage(Server $server, Frame $frame)
     {
-        $data = json_decode($frame->data, false);
-        if (!isset($data->action) || !isset($data->game_id) || !isset($data->player_id)) {
+        $data = json_decode($frame->data, true);
+        if (!isset($data['action']) || !isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($frame->fd, json_encode(["status" => "error", "message" => "Invalid request"]));
             return;
         }
-        $game_id = $data->game_id;
-        $player_id = $data->player_id;
-        // Validate if player is part of game
-        if (!isset($this->connections[$game_id][$player_id]) || $this->connections[$game_id][$player_id] !== $frame->fd) {
-            $server->push($frame->fd, json_encode(["status" => "error", "message" => "Unauthorized access to game"]));
+
+        $game_id = (int)$data['game_id'];
+        $player_id = (int)$data['player_id'];
+
+        // Verify that the player is connected to this game
+        $connection = $this->connectionTable->get($frame->fd);
+        if (!$connection || $connection['game_id'] !== $game_id || $connection['player_id'] !== $player_id) {
+            $server->push($frame->fd, json_encode([
+                "status" => "error",
+                "message" => "Unauthorized access to game"
+            ]));
             return;
         }
 
         // Push messages based on actions
-        switch ($data->action) {
+        switch ($data['action']) {
             case "roledDice":
                 $this->roledDice($server, $frame->fd, $data);
                 break;
@@ -156,166 +199,215 @@ class GameSocket
                 $server->push($frame->fd, json_encode(["status" => "error", "message" => "Unknown action"]));
         }
     }
+
     // Game Actions Methods
     public function roledDice(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
-            $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID and Player ID not supplied"]));
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['dice_value'])) {
+            $server->push($fd, json_encode(["status" => "Error", "message" => "Required fields not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function pieceEnter(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function pieceMove(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function capturePiece(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function safeZone(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function extraTurn(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function pieceHome(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function gameWin(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function skipTurn(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     public function loseTurn(Server $server, int $fd, $data)
     {
-        if (!isset($data->game_id) || !isset($data->player_id)) {
+        if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
-        $this->broadcast($server, $data->game_id, $data, $fd);
+        $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
     // Method to start the socket server
     public function start()
     {
-        echo "WebSocket server started";
+        echo "WebSocket server started on port 9002\n";
         $this->server->start();
     }
+
     // Method that handles disconnections
     public function onClose(Server $server, int $fd)
     {
-        foreach ($this->connections as $game_id => &$players) {
-            foreach ($players as $player => $player_fd) {
-                if ($player_fd === $fd) {
-                    // Check if connection exists
-                    if ($server->exists($fd)) {
-                        $server->push($fd, json_encode([
-                            'status' => 'Disconnected',
-                            'message' => "Connection lost"
-                        ]));
-                    }
-                    // Remove player from game
-                    unset($players[$player]);
-                    // Notify remaining players
-                    $this->broadcast($server, $game_id, [
-                        'status' => 'Disconnected',
-                        'message' => "Player {$player} has left the game",
-                    ]);
-                    // If no players left, remove the game session
-                    if (empty($players)) {
-                        unset($this->connections[$game_id]);
-                    }
-                    return;
-                }
-            }
-        }
-    }
-    // Method help broadcast data
-    public function broadcast($server, $game, $data, ?int $exclude = null)
-    {
-        if (!isset($this->connections[$game])) {
-            echo "Game error";
-            if ($exclude !== null) {
-                $server->push($exclude, json_encode(['status' => 'Error', 'message' => 'Invalid game entry']));
-            }
+        echo "\nConnection closed: fd={$fd}";
+
+        // Check if this connection exists in our table
+        if (!$this->connectionTable->exists($fd)) {
+            echo "\nConnection not found in table: fd={$fd}";
             return;
         }
-        // Determine the broadcast message based on the action
 
-        foreach ($this->connections[$game] as $player) {
-            if ($exclude !== null && $player == $exclude) {
-                continue; // Skip the sender
+        // Get connection details
+        $connection = $this->connectionTable->get($fd);
+        $game_id = $connection['game_id'];
+        $player_id = $connection['player_id'];
+
+        echo "\nPlayer {$player_id} disconnected from game {$game_id}";
+
+        // Remove from connection table
+        $this->connectionTable->del($fd);
+
+        // Update game player count
+        if ($this->gameTable->exists($game_id)) {
+            $gameInfo = $this->gameTable->get($game_id);
+            $newCount = max(0, $gameInfo['player_count'] - 1);
+
+            if ($newCount > 0) {
+                $this->gameTable->set($game_id, [
+                    'player_count' => $newCount,
+                    'active' => 1
+                ]);
+
+                // Notify remaining players
+                $this->broadcastToGame($server, $game_id, [
+                    'action' => 'playerDisconnected',
+                    'status' => 'Disconnected',
+                    'player_id' => $player_id,
+                    'message' => "Player {$player_id} has left the game"
+                ]);
+            } else {
+                // If no players left, mark game as inactive or remove it
+                $this->gameTable->set($game_id, [
+                    'player_count' => 0,
+                    'active' => 0
+                ]);
+                echo "\nGame {$game_id} is now inactive (no players)";
             }
-            $message = match ($data->action ?? '') {
-                'roledDice'    => "{$data->player_id} rolled a dice and got {$data->dice_value}",
-                'pieceEnter'   => "{$data->player_id} moved a piece onto the board",
-                'pieceMove'    => "{$data->player_id} moved a piece",
-                'capturePiece' => "{$data->player_id} captured an opponent's piece",
-                'safeZone'     => "{$data->player_id} entered a safe zone",
-                'extraTurn'    => "{$data->player_id} earned an extra turn",
-                'pieceHome'    => "{$data->player_id} moved a piece to home",
-                'gameWin'      => "{$data->player_id} has won the game!",
-                'skipTurn'     => "{$data->player_id} skipped their turn",
-                'loseTurn'     => "{$data->player_id} lost their turn",
-                default        => "{$data->player_id} performed an action"
-            };
-            $server->push($player, json_encode(["status" => "notification", "message" => $message]));
         }
+        $this->printConnectionStatus();
+    }
+
+    // Helper method to print current connection status
+    private function printConnectionStatus()
+    {
+        echo "\n--- Current Connections ---";
+        echo "\nConnections:";
+        foreach ($this->connectionTable as $fd => $info) {
+            echo "\n  fd: {$fd}, game: {$info['game_id']}, player: {$info['player_id']}";
+        }
+
+        echo "\nGames:";
+        foreach ($this->gameTable as $game_id => $info) {
+            echo "\n  game: {$game_id}, players: {$info['player_count']}, active: {$info['active']}";
+        }
+        echo "\n--------------------------";
+    }
+
+    // Method to broadcast data to all players in a game
+    public function broadcastToGame($server, $game_id, $data, $exclude = null)
+    {
+        echo "\nBroadcasting to game {$game_id}";
+
+        $player_id = $data['player_id'] ?? 'unknown';
+
+        // Determine the broadcast message based on the action
+        $message = match ($data['action'] ?? '') {
+            'playerConnected' => "Player {$player_id} has joined the game",
+            'playerDisconnected' => "Player {$player_id} has left the game",
+            'roledDice' => "Player {$player_id} rolled a dice and got {$data['dice_value']}",
+            'pieceEnter' => "Player {$player_id} moved a piece onto the board",
+            'pieceMove' => "Player {$player_id} moved a piece",
+            'capturePiece' => "Player {$player_id} captured an opponent's piece",
+            'safeZone' => "Player {$player_id} entered a safe zone",
+            'extraTurn' => "Player {$player_id} earned an extra turn",
+            'pieceHome' => "Player {$player_id} moved a piece to home",
+            'gameWin' => "Player {$player_id} has won the game!",
+            'skipTurn' => "Player {$player_id} skipped their turn",
+            'loseTurn' => "Player {$player_id} lost their turn",
+            default => "Player {$player_id} performed an action"
+        };
+
+        // Find all connections for this game
+        $recipients = 0;
+        foreach ($this->connectionTable as $fd => $info) {
+            if ($info['game_id'] == $game_id && ($exclude === null || $fd != $exclude)) {
+                $recipients++;
+                echo "\nBroadcasting to fd = {$fd}, player = {$info['player_id']}: {$message}";
+                // Send the data along with a user-friendly message
+                $server->push($fd, json_encode([
+                    "status" => "notification",
+                    "message" => $message,
+                    "data" => $data
+                ]));
+            }
+        }
+
+        echo "\nBroadcast completed: {$recipients} recipient(s)";
+        echo "\n ---- ==================================================== ----";
     }
 }
 
 $socket = new GameSocket();
-
 $socket->start();
