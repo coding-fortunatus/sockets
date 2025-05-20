@@ -1,0 +1,102 @@
+name: Ludo Socket CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:    # Allows manual triggering of the workflow
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, dom, zip
+          coverage: none
+
+      - name: Validate composer.json and composer.lock
+        run: |
+          if [ -f "composer.json" ]; then
+            composer validate --strict
+          fi
+
+      - name: Install dependencies
+        run: |
+          if [ -f "composer.json" ]; then
+            composer install --prefer-dist --no-progress
+          fi
+
+      - name: Run PHP linting
+        run: |
+          find . -type f -name "*.php" -not -path "./vendor/*" -exec php -l {} \;
+
+      - name: Run PHP Code Sniffer
+        run: |
+          if [ -f "vendor/bin/phpcs" ]; then
+            ./vendor/bin/phpcs
+          fi
+
+      - name: Setup SSH Key
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
+
+      - name: Deploy to production
+        run: |
+          # Create a temporary deployment directory
+          ssh -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
+          
+          # Archive the project excluding development files and transfer to the server
+          tar --exclude='.git' --exclude='node_modules' --exclude='.github' -czf deploy.tar.gz .
+          scp deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
+          
+          # Deploy script on the remote server
+          ssh -o StrictHostKeyChecking=no ludo@20.169.153.179 << 'EOF'
+            cd /tmp/deploy_temp
+            tar -xzf deploy.tar.gz
+            
+            # Backup current code and .env file
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            sudo mkdir -p /var/opt/sockets/backups
+            sudo tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+            
+            # Preserve .env file by copying it from the server to our temp directory
+            if [ -f "/var/opt/sockets/.env" ]; then
+              cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
+            fi
+            
+            # Deploy new code but exclude .env if it exists on the server
+            sudo rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
+            
+            # Put back the preserved .env file
+            if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
+              sudo cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
+              echo "Preserved existing .env file"
+            elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
+              # If no .env exists but we have an example, copy it as a starting point
+              sudo cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
+              echo "Created .env from .env.Example"
+            fi
+            
+            # Set appropriate permissions
+            sudo chown -R www-data:www-data /var/opt/sockets
+            sudo chmod -R 755 /var/opt/sockets
+            
+            # Restart supervisor to apply changes
+            sudo supervisorctl restart gamesocket
+            
+            # Clean up temporary deployment files
+            cd ~
+            rm -rf /tmp/deploy_temp
+          EOF
+
+          echo "Deployment completed successfully"
