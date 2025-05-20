@@ -182,7 +182,7 @@ class GameSocket
     public function onMessage(Server $server, Frame $frame)
     {
         $data = json_decode($frame->data, true);
-        if (!isset($data['action']) || !isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['action']) || !isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($frame->fd, json_encode(["status" => "error", "message" => "Invalid request"]));
             return;
         }
@@ -413,16 +413,16 @@ class GameSocket
         $message = match ($data['action'] ?? '') {
             'playerConnected' => "Player {$player_id} has joined the game",
             'playerDisconnected' => "Player {$player_id} has left the game",
-            'updatePlayers' => "Player {$player_id} rolled a dice and got {$data['dice_value']}",
-            'updateDiceNo' => "Player {$player_id} moved a piece onto the board",
-            'enablePileSelection' => "Player {$player_id} moved a piece",
-            'updatePlayerChance' => "Player {$player_id} captured an opponent's piece",
-            'enableCellSelection' => "Player {$player_id} entered a safe zone",
-            'updateFireworks' => "Player {$player_id} earned an extra turn",
-            'updatePlayerPieceValue' => "Player {$player_id} moved a piece to home",
-            'unfreezeDice' => "Player {$player_id} has won the game!",
-            'disableTouch' => "Player {$player_id} skipped their turn",
-            'announceWinner' => "Player {$player_id} lost their turn",
+            'updatePlayers' => "Players updated",
+            'updateDiceNo' => "Player dice number updated",
+            'enablePileSelection' => "Pile selection enabled",
+            'updatePlayerChance' => "Update player chance",
+            'enableCellSelection' => "Cell selection enabled",
+            'updateFireworks' => "Fireworks updated",
+            'updatePlayerPieceValue' => "Player piece value updated",
+            'unfreezeDice' => "Dice unfrozen",
+            'disableTouch' => "Touch disabled",
+            'announceWinner' => "Winner",
             default => "Player {$player_id} performed an action"
         };
 
@@ -436,7 +436,8 @@ class GameSocket
                 $server->push($fd, json_encode([
                     "status" => "notification",
                     "message" => $message,
-                    "data" => $data
+                    "action" => $data['action'],
+                    "data" => $data['data'] ?? null,
                 ]));
             }
         }
