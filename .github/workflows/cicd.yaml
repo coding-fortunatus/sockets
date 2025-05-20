@@ -12,28 +12,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       
-      - name: Install SSH key
-        uses: webfactory/ssh-agent@v0.8.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
-      
-      - name: Add Host Key
-        run: ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
-      
-      - name: Test SSH Connection
-        run: ssh -o StrictHostKeyChecking=no ludo@20.169.153.179 "echo Connection successful"
+      - name: Setup Deploy Key
+        run: |
+          # Create .ssh directory
+          mkdir -p ~/.ssh
+          
+          # Add the deployment key from secrets (generate this locally without passphrase)
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          
+          # Add server to known hosts
+          ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
+          
+          # Test the connection
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "echo Connection test successful"
       
       - name: Deploy to production
         run: |
           # Create a temporary deployment directory
-          ssh -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
           
           # Archive the project excluding development files and transfer to the server
           tar --exclude='.git' --exclude='node_modules' --exclude='.github' -czf deploy.tar.gz .
-          scp deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
+          scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
           
           # Deploy script on the remote server
-          ssh -o StrictHostKeyChecking=no ludo@20.169.153.179 << 'ENDSSH'
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 << 'ENDSSH'
             cd /tmp/deploy_temp
             tar -xzf deploy.tar.gz
             
