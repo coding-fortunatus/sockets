@@ -202,35 +202,35 @@ class GameSocket
 
         // Push messages based on actions
         switch ($data['action']) {
-            case "roledDice":
-                $this->roledDice($server, $frame->fd, $data);
+            case "updatePlayers":
+                $this->updatePlayers($server, $frame->fd, $data);
                 break;
-            case "pieceEnter":
-                $this->pieceEnter($server, $frame->fd, $data);
+            case "updateDiceNo":
+                $this->updateDiceNo($server, $frame->fd, $data);
                 break;
-            case "pieceMove":
-                $this->pieceMove($server, $frame->fd, $data);
+            case "enablePileSelection":
+                $this->enablePileSelection($server, $frame->fd, $data);
                 break;
-            case "capturePiece":
-                $this->capturePiece($server, $frame->fd, $data);
+            case "updatePlayerChance":
+                $this->updatePlayerChance($server, $frame->fd, $data);
                 break;
-            case "safeZone":
-                $this->safeZone($server, $frame->fd, $data);
+            case "enableCellSelection":
+                $this->enableCellSelection($server, $frame->fd, $data);
                 break;
-            case "extraTurn":
-                $this->extraTurn($server, $frame->fd, $data);
+            case "updateFireworks":
+                $this->updateFireworks($server, $frame->fd, $data);
                 break;
-            case "pieceHome":
-                $this->pieceHome($server, $frame->fd, $data);
+            case "updatePlayerPieceValue":
+                $this->updatePlayerPieceValue($server, $frame->fd, $data);
                 break;
-            case "gameWin":
-                $this->gameWin($server, $frame->fd, $data);
+            case "unfreezeDice":
+                $this->unfreezeDice($server, $frame->fd, $data);
                 break;
-            case "skipTurn":
-                $this->skipTurn($server, $frame->fd, $data);
+            case "disableTouch":
+                $this->disableTouch($server, $frame->fd, $data);
                 break;
-            case "loseTurn":
-                $this->loseTurn($server, $frame->fd, $data);
+            case "announceWinner":
+                $this->announceWinner($server, $frame->fd, $data);
                 break;
             default:
                 $server->push($frame->fd, json_encode(["status" => "error", "message" => "Unknown action"]));
@@ -238,7 +238,7 @@ class GameSocket
     }
 
     // Game Actions Methods
-    public function roledDice(Server $server, int $fd, $data)
+    public function updatePlayers(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['dice_value'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Required fields not supplied"]));
@@ -247,7 +247,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function pieceEnter(Server $server, int $fd, $data)
+    public function updateDiceNo(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -256,7 +256,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function pieceMove(Server $server, int $fd, $data)
+    public function enablePileSelection(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -265,7 +265,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function capturePiece(Server $server, int $fd, $data)
+    public function updatePlayerChance(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -274,7 +274,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function safeZone(Server $server, int $fd, $data)
+    public function enableCellSelection(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -283,7 +283,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function extraTurn(Server $server, int $fd, $data)
+    public function updateFireworks(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -292,7 +292,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function pieceHome(Server $server, int $fd, $data)
+    public function updatePlayerPieceValue(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -301,7 +301,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function gameWin(Server $server, int $fd, $data)
+    public function unfreezeDice(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -310,7 +310,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function skipTurn(Server $server, int $fd, $data)
+    public function disableTouch(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -319,7 +319,7 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    public function loseTurn(Server $server, int $fd, $data)
+    public function announceWinner(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
@@ -413,16 +413,16 @@ class GameSocket
         $message = match ($data['action'] ?? '') {
             'playerConnected' => "Player {$player_id} has joined the game",
             'playerDisconnected' => "Player {$player_id} has left the game",
-            'roledDice' => "Player {$player_id} rolled a dice and got {$data['dice_value']}",
-            'pieceEnter' => "Player {$player_id} moved a piece onto the board",
-            'pieceMove' => "Player {$player_id} moved a piece",
-            'capturePiece' => "Player {$player_id} captured an opponent's piece",
-            'safeZone' => "Player {$player_id} entered a safe zone",
-            'extraTurn' => "Player {$player_id} earned an extra turn",
-            'pieceHome' => "Player {$player_id} moved a piece to home",
-            'gameWin' => "Player {$player_id} has won the game!",
-            'skipTurn' => "Player {$player_id} skipped their turn",
-            'loseTurn' => "Player {$player_id} lost their turn",
+            'updatePlayers' => "Player {$player_id} rolled a dice and got {$data['dice_value']}",
+            'updateDiceNo' => "Player {$player_id} moved a piece onto the board",
+            'enablePileSelection' => "Player {$player_id} moved a piece",
+            'updatePlayerChance' => "Player {$player_id} captured an opponent's piece",
+            'enableCellSelection' => "Player {$player_id} entered a safe zone",
+            'updateFireworks' => "Player {$player_id} earned an extra turn",
+            'updatePlayerPieceValue' => "Player {$player_id} moved a piece to home",
+            'unfreezeDice' => "Player {$player_id} has won the game!",
+            'disableTouch' => "Player {$player_id} skipped their turn",
+            'announceWinner' => "Player {$player_id} lost their turn",
             default => "Player {$player_id} performed an action"
         };
 
