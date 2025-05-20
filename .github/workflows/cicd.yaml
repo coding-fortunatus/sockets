@@ -12,28 +12,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       
-      - name: Setup SSH Key
-        run: |
-          mkdir -p ~/.ssh/
-          
-          # Create the private key file
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_encrypted
-          chmod 600 ~/.ssh/id_rsa_encrypted
-          
-          # Install sshpass for passphrase handling
-          sudo apt-get update
-          sudo apt-get install -y sshpass
-          
-          # Create key without passphrase
-          SSHPASS="${{ secrets.SSH_PRIVATE_KEY_PASSPHRASE }}" sshpass -P passphrase ssh-keygen -p -f ~/.ssh/id_rsa_encrypted -N ""
-          
-          # Move the key to standard location
-          mv ~/.ssh/id_rsa_encrypted ~/.ssh/id_rsa
-          
-          # Setup SSH agent
-          ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
-          eval $(ssh-agent -s)
-          ssh-add ~/.ssh/id_rsa
+      - name: Install SSH key
+        uses: webfactory/ssh-agent@v0.8.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+      
+      - name: Add Host Key
+        run: ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
+      
+      - name: Test SSH Connection
+        run: ssh -o StrictHostKeyChecking=no ludo@20.169.153.179 "echo Connection successful"
       
       - name: Deploy to production
         run: |
