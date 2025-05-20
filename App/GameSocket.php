@@ -240,7 +240,7 @@ class GameSocket
     // Game Actions Methods
     public function updatePlayers(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['dice_value'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Required fields not supplied"]));
             return;
         }
@@ -249,7 +249,7 @@ class GameSocket
 
     public function updateDiceNo(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -258,7 +258,7 @@ class GameSocket
 
     public function enablePileSelection(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -267,7 +267,7 @@ class GameSocket
 
     public function updatePlayerChance(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -276,7 +276,7 @@ class GameSocket
 
     public function enableCellSelection(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -285,7 +285,7 @@ class GameSocket
 
     public function updateFireworks(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -294,7 +294,7 @@ class GameSocket
 
     public function updatePlayerPieceValue(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -303,7 +303,7 @@ class GameSocket
 
     public function unfreezeDice(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -312,7 +312,7 @@ class GameSocket
 
     public function disableTouch(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
@@ -321,7 +321,7 @@ class GameSocket
 
     public function announceWinner(Server $server, int $fd, $data)
     {
-        if (!isset($data['game_id']) || !isset($data['player_id'])) {
+        if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
             $server->push($fd, json_encode(["status" => "Error", "message" => "Game ID & Player ID not supplied"]));
             return;
         }
