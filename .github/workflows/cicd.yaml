@@ -15,33 +15,22 @@ jobs:
       - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh/
-          # Use SSH_PRIVATE_KEY_PASSPHRASE if the key has a passphrase
-          if [ ! -z "${{ secrets.SSH_PRIVATE_KEY_PASSPHRASE }}" ]; then
-            echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_with_pass
-            chmod 600 ~/.ssh/id_rsa_with_pass
-            
-            # Create an expect script to automate passphrase entry
-            sudo apt-get install -y expect
-            cat > ~/ssh_with_pass.exp << 'EOT'
-            #!/usr/bin/expect
-            spawn ssh-keygen -p -P "$env(OLD_PASS)" -N "" -f "$env(KEY_FILE)"
-            expect eof
-            EOT
-            chmod +x ~/ssh_with_pass.exp
-            
-            # Run the expect script to remove the passphrase
-            export OLD_PASS="${{ secrets.SSH_PRIVATE_KEY_PASSPHRASE }}"
-            export KEY_FILE=~/.ssh/id_rsa_with_pass
-            ~/ssh_with_pass.exp
-            
-            # Move the passphrase-free key to the standard location
-            mv ~/.ssh/id_rsa_with_pass ~/.ssh/id_rsa
-          else
-            # No passphrase, just write the key directly
-            echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-            chmod 600 ~/.ssh/id_rsa
-          fi
           
+          # Create the private key file
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa_encrypted
+          chmod 600 ~/.ssh/id_rsa_encrypted
+          
+          # Install sshpass for passphrase handling
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+          
+          # Create key without passphrase
+          SSHPASS="${{ secrets.SSH_PRIVATE_KEY_PASSPHRASE }}" sshpass -P passphrase ssh-keygen -p -f ~/.ssh/id_rsa_encrypted -N ""
+          
+          # Move the key to standard location
+          mv ~/.ssh/id_rsa_encrypted ~/.ssh/id_rsa
+          
+          # Setup SSH agent
           ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
           eval $(ssh-agent -s)
           ssh-add ~/.ssh/id_rsa
