@@ -1,10 +1,12 @@
 name: Ludo Game Socket CI/CD Pipeline
+
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:    # Allows manual triggering of the workflow
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -33,7 +35,7 @@ jobs:
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
           
           # Archive the project excluding development files and transfer to the server
-          tar --exclude='.git' --exclude='node_modules' --exclude='.github' -czf deploy.tar.gz .
+          tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
           scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
           
           # Deploy script on the remote server
@@ -80,3 +82,4 @@ jobs:
             rm -rf /tmp/deploy_temp
             
             echo "Deployment completed successfully"
+          ENDSSH
