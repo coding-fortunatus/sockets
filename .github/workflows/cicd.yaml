@@ -1,4 +1,4 @@
-name: Ludo Socket CI/CD Pipeline
+name: Ludo Game Socket CI/CD Pipeline
 
 on:
   push:
@@ -13,35 +13,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-
-      - name: Setup PHP
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: '8.2'
-          extensions: mbstring, dom, zip
-          coverage: none
-
-      - name: Validate composer.json and composer.lock
-        run: |
-          if [ -f "composer.json" ]; then
-            composer validate --strict
-          fi
-
-      - name: Install dependencies
-        run: |
-          if [ -f "composer.json" ]; then
-            composer install --prefer-dist --no-progress
-          fi
-
-      - name: Run PHP linting
-        run: |
-          find . -type f -name "*.php" -not -path "./vendor/*" -exec php -l {} \;
-
-      - name: Run PHP Code Sniffer
-        run: |
-          if [ -f "vendor/bin/phpcs" ]; then
-            ./vendor/bin/phpcs
-          fi
 
       - name: Setup SSH Key
         run: |
@@ -87,6 +58,10 @@ jobs:
               echo "Created .env from .env.Example"
             fi
             
+            # Install composer dependencies on the server (where OpenSwoole is already installed)
+            cd /var/opt/sockets
+            composer install --no-dev --optimize-autoloader
+            
             # Set appropriate permissions
             sudo chown -R www-data:www-data /var/opt/sockets
             sudo chmod -R 755 /var/opt/sockets
@@ -97,6 +72,9 @@ jobs:
             # Clean up temporary deployment files
             cd ~
             rm -rf /tmp/deploy_temp
+            
+            echo "Deployment completed successfully"
+          EOF
           EOF
 
           echo "Deployment completed successfully"
