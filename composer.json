@@ -1,6 +1,6 @@
 {
     "name": "ludo/ludo_socket",
-    "type": "library",
+    "type": "project",
     "license": "MIT",
     "autoload": {
         "psr-4": {
