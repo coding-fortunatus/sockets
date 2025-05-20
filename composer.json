@@ -1,5 +1,6 @@
 {
     "name": "ludo/ludo_socket",
+    "description": "PHP WebSocket server implementation for Ludo game",
     "type": "project",
     "license": "MIT",
     "autoload": {
