@@ -49,9 +49,9 @@ jobs:
             if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
               sudo cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
               echo "Preserved existing .env file"
-            elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
-              sudo cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
-              echo "Created .env from .env.Example"
+            elif [ -f "/tmp/deploy_temp/.env.example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
+              sudo cp /tmp/deploy_temp/.env.example /var/opt/sockets/.env
+              echo "Created .env from .env.example"
             fi
             # Install dependencies
             cd /var/opt/sockets

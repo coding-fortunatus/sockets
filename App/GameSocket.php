@@ -163,6 +163,7 @@ class GameSocket
             $server->push($request->fd, json_encode([
                 'status' => 'Connected',
                 'message' => "Player connected to game {$game_id}",
+                'players' => $this->gameTable->get($game_id)['player_count'],
             ]));
 
             // Broadcast to other players about the new connection
