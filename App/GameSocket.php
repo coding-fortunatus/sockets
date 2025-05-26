@@ -438,7 +438,7 @@ class GameSocket
                     "status" => "notification",
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? null,
+                    "data" => $data['data'] ?? $this->gameTable->get($game_id)['player_count'],
                 ]));
             }
         }
