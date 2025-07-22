@@ -123,8 +123,6 @@ class GameSocket
         try {
             // Ensure database connection is active before querying
             $this->ensureDbConnection();
-
-            // Use prepared statements to prevent SQL injection
             $stmt = $this->db->prepare("SELECT * FROM games_players WHERE gameId = ? AND userId = ?");
             $stmt->execute([$game_id, $player_id]);
             $result = $stmt->fetch(PDO::FETCH_OBJ);
@@ -427,6 +425,14 @@ class GameSocket
             default => "Player {$player_id} performed an action"
         };
 
+        // Calculate actual live player count
+        $livePlayerCount = 0;
+        foreach ($this->connectionTable as $fd => $info) {
+            if ($info['game_id'] == $game_id) {
+                $livePlayerCount++;
+            }
+        }
+
         // Find all connections for this game
         $recipients = 0;
         foreach ($this->connectionTable as $fd => $info) {
@@ -438,7 +444,7 @@ class GameSocket
                     "status" => "notification",
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? $this->gameTable->get($game_id)['player_count'],
+                    "data" => $data['data'] ?? $livePlayerCount,
                 ]));
             }
         }
