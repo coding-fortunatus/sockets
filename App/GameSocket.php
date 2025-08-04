@@ -401,6 +401,17 @@ class GameSocket
         echo "\n--------------------------";
     }
 
+    public function getLiveGames()
+    {
+        $liveGames = [];
+        foreach ($this->gameTable as $game_id => $info) {
+            if ($info['active'] === 1) {
+                $liveGames[] = $game_id;
+            }
+        }
+        return $liveGames;
+    }
+
     // Method to broadcast data to all players in a game
     public function broadcastToGame($server, $game_id, $data, $exclude = null)
     {
