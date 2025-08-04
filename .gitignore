@@ -1,4 +1,4 @@
 /vendor
 /.git
-
+.vscode/
 .env
