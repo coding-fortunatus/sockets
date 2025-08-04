@@ -443,7 +443,7 @@ class GameSocket
         //         $livePlayerCount++;
         //     }
         // }
-        $livePlayerCount = $this->getLivePlayersInGame($game_id);
+        // $livePlayerCount = ;
 
 
         // Find all connections for this game
@@ -457,7 +457,7 @@ class GameSocket
                     "status" => "notification",
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? $livePlayerCount,
+                    "data" => $data['data'] ?? $this->getLivePlayersInGame($game_id),
                 ]));
             }
         }
