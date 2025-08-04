@@ -436,6 +436,8 @@ class GameSocket
             default => "Player {$player_id} performed an action"
         };
 
+        $playerCount = $this->getLivePlayersInGame($game_id);
+
         // Find all connections for this game
         $recipients = 0;
         foreach ($this->connectionTable as $fd => $info) {
@@ -447,7 +449,7 @@ class GameSocket
                     "status" => "notification",
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? $this->getLivePlayersInGame($game_id),
+                    "data" => $data['data'] ?? $playerCount,
                 ]));
             }
         }
