@@ -405,11 +405,8 @@ class GameSocket
     {
         $count = 0;
         foreach ($this->connectionTable as $info) {
-            if (
-                isset($info['game_id'], $info['player_id']) &&
-                $info['game_id'] === $game_id
-            ) {
-                $count++;
+            if (isset($info['game_id'], $info['player_id']) && $info['game_id'] === $game_id) {
+                $count += 1;
             }
         }
         return $count;
