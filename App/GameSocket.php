@@ -401,16 +401,17 @@ class GameSocket
         echo "\n--------------------------";
     }
 
-    private function getLivePlayersInGame($game_id): int
+    private function getLivePlayersInGame($game_id, $excludeFd = null): int
     {
         $count = 0;
-        foreach ($this->connectionTable as $info) {
-            if (isset($info['game_id'], $info['player_id']) && $info['game_id'] === $game_id) {
-                $count += 1;
+        foreach ($this->connectionTable as $fd => $info) {
+            if (isset($info['game_id'], $info['player_id']) && $info['game_id'] === $game_id && ($excludeFd === null || $fd !== $excludeFd)) {
+                $count++;
             }
         }
         return $count;
     }
+
 
     // Method to broadcast data to all players in a game
     public function broadcastToGame($server, $game_id, $data, $exclude = null)
@@ -457,7 +458,7 @@ class GameSocket
                     "status" => "notification",
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? $this->getLivePlayersInGame($game_id),
+                    "data" => $data['data'] ?? $this->getLivePlayersInGame($game_id, $exclude),
                 ]));
             }
         }
