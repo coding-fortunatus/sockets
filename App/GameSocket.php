@@ -436,7 +436,7 @@ class GameSocket
                     "status" => "notification",
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? 0,
+                    "data" => $data['data'] ?? $recipients + 1,
                 ]));
             }
         }
