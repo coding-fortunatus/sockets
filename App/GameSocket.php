@@ -448,6 +448,7 @@ class GameSocket
                     "message" => $message,
                     "action" => $data['action'],
                     "data" => $data['data'] ?? $recipients + 1,
+                    "live_games" => $this->getLiveGames(),
                 ]));
             }
         }
