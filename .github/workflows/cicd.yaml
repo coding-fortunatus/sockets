@@ -45,8 +45,8 @@ jobs:
             
             # Backup current code and .env file
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            sudo mkdir -p /var/opt/sockets/backups
-            sudo tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+            mkdir -p /var/opt/sockets/backups
+            tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
             
             # Preserve .env file by copying it from the server to our temp directory
             if [ -f "/var/opt/sockets/.env" ]; then
@@ -54,15 +54,15 @@ jobs:
             fi
             
             # Deploy new code but exclude .env if it exists on the server
-            sudo rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
+            rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
             
             # Put back the preserved .env file
             if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
-              sudo cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
+              cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
               echo "Preserved existing .env file"
             elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
               # If no .env exists but we have an example, copy it as a starting point
-              sudo cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
+              cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
               echo "Created .env from .env.Example"
             fi
             
@@ -71,11 +71,11 @@ jobs:
             composer install --no-dev --optimize-autoloader
             
             # Set appropriate permissions
-            sudo chown -R www-data:www-data /var/opt/sockets
-            sudo chmod -R 755 /var/opt/sockets
+            chown -R www-data:www-data /var/opt/sockets
+            chmod -R 755 /var/opt/sockets
             
             # Restart supervisor to apply changes
-            sudo supervisorctl restart gamesocket
+            supervisorctl restart gamesocket
             
             # Clean up temporary deployment files
             cd ~
