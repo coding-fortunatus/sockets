@@ -33,6 +33,8 @@ jobs:
           
           # Deploy script on the remote server
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 << 'ENDSSH'
+            set -e  # Exit immediately if any command fails
+            
             cd /tmp/deploy_temp
             tar -xzf deploy.tar.gz
             
@@ -53,15 +55,36 @@ jobs:
               sudo cp /tmp/deploy_temp/.env.example /var/opt/sockets/.env
               echo "Created .env from .env.example"
             fi
+            
             # Install dependencies
             cd /var/opt/sockets
             composer install --no-dev --optimize-autoloader
             
+            # Set permissions
             sudo chown -R www-data:www-data /var/opt/sockets
             sudo chmod -R 755 /var/opt/sockets
             
-            sudo supervisorctl restart gamesocket
+            # Supervisor process management
+            echo "=== Current Supervisor Status ==="
+            sudo supervisorctl status
             
+            echo "=== Updating Supervisor ==="
+            sudo supervisorctl update
+            
+            echo "=== Restarting Process ==="
+            if sudo supervisorctl status | grep -q 'gamesocket'; then
+              echo "Restarting specific gamesocket process..."
+              sudo supervisorctl restart gamesocket
+            else
+              echo "gamesocket process not found, restarting all..."
+              sudo supervisorctl restart all
+            fi
+            
+            echo "=== Verifying Restart ==="
+            sleep 3  # Give it time to restart
+            sudo supervisorctl status
+            
+            # Cleanup
             cd ~
             rm -rf /tmp/deploy_temp
             
