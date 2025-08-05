@@ -16,7 +16,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0  # Get full commit history for verification
+          fetch-depth: 0
 
       - name: Setup SSH Key
         run: |
@@ -27,58 +27,53 @@ jobs:
 
       - name: Create deployment archive
         run: |
-          # Get the current commit hash for verification
           echo "COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
-          
-          # Create archive using git to ensure all tracked files are included
           git archive --format=tar HEAD | gzip > deploy.tar.gz
 
       - name: Upload and deploy to server
         run: |
-          # Upload archive
           scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp.tar.gz
 
-          # Execute deployment with sudo password handling preserved
           ssh -i ~/.ssh/deploy_key ludo@20.169.153.179 "bash -s" <<'EOF'
             set -ex
 
             export SUDO_PASS="${{ secrets.LUDO_SSH_PASSWORD }}"
             SUDO="echo \$SUDO_PASS | sudo -S"
 
-            # Create temp directory
+            # Setup temp directory
             rm -rf /tmp/deploy_temp
             mkdir -p /tmp/deploy_temp
-            
-            # Extract archive
             tar -xzf /tmp/deploy_temp.tar.gz -C /tmp/deploy_temp
 
-            # Verify extracted files
+            # File verification - using simpler count method
             echo "=== Files in deployment package ==="
-            ls -la /tmp/deploy_temp | head -20
-            echo "Total files: \$(find /tmp/deploy_temp -type f | wc -l)"
+            ls -la /tmp/deploy_temp
+            FILE_COUNT=\$(find /tmp/deploy_temp -type f | wc -l)
+            echo "Total files: \$FILE_COUNT"
 
             # Backup current deployment
             TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
             \$SUDO mkdir -p /var/opt/sockets/backups
             \$SUDO tar -czf /var/opt/sockets/backups/backup_\${TIMESTAMP}.tar.gz -C /var/opt/sockets .
 
-            # Preserve .env if exists
+            # Preserve .env
             if [ -f "/var/opt/sockets/.env" ]; then
               cp /var/opt/sockets/.env /tmp/deploy_temp/
               echo "Preserved existing .env file"
             fi
 
-            # Sync files with verification
+            # Sync files
             echo "=== Syncing files ==="
             \$SUDO rsync -avc --delete \
               --exclude="backups" \
               --exclude=".env" \
               /tmp/deploy_temp/ /var/opt/sockets/
 
-            # Verify synced files
+            # Verify sync
             echo "=== Files in production ==="
-            \$SUDO ls -la /var/opt/sockets | head -20
-            echo "Total files: \$(find /var/opt/sockets -type f | wc -l)"
+            \$SUDO ls -la /var/opt/sockets
+            PROD_FILE_COUNT=\$(\$SUDO find /var/opt/sockets -type f | wc -l)
+            echo "Total files in production: \$PROD_FILE_COUNT"
 
             # Install dependencies
             cd /var/opt/sockets
@@ -87,13 +82,6 @@ jobs:
             # Set permissions
             \$SUDO chown -R www-data:www-data /var/opt/sockets
             \$SUDO chmod -R 755 /var/opt/sockets
-
-            # Verify deployment
-            echo "=== Deployment Verification ==="
-            echo "Deployed commit: $COMMIT_SHA"
-            if [ -f "/var/opt/sockets/composer.json" ]; then
-              echo "Current version: \$(jq -r '.version' /var/opt/sockets/composer.json 2>/dev/null || echo 'N/A')"
-            fi
 
             # Restart service
             \$SUDO supervisorctl restart gamesocket
