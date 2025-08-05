@@ -21,6 +21,7 @@ class GameSocket
     protected Server $server;
     protected Table $connectionTable;
     protected Table $gameTable;
+    protected Table $playersTable; // New table to track players per game
 
     private static array $config = [
         'host' => '',
@@ -49,6 +50,11 @@ class GameSocket
         $this->gameTable->column('active', Table::TYPE_INT, 1); // 1 = active, 0 = inactive
         $this->gameTable->create();
 
+        // New table to track players in each game (game_id => player_id1,player_id2,...)
+        $this->playersTable = new Table(256);
+        $this->playersTable->column('player_ids', Table::TYPE_STRING, 1024); // CSV of player IDs
+        $this->playersTable->create();
+
         // Initialize Open Swoole Server
         $this->server = new Server('0.0.0.0', 9002);
         $this->server->on('open', [$this, "onOpen"]);
@@ -62,7 +68,6 @@ class GameSocket
         self::$config['password'] = $_ENV['DB_PASSWORD'];
 
         if ($_ENV['APP_ENV'] === 'production') {
-            // Use the full path to the certificate
             $certPath = __DIR__ . '/BaltimoreCyberTrustRoot.crt.pem';
             if (file_exists($certPath)) {
                 self::$config['options'][PDO::MYSQL_ATTR_SSL_CA] = $certPath;
@@ -90,14 +95,11 @@ class GameSocket
     private function ensureDbConnection()
     {
         try {
-            // Check if connection is still alive
             if (!$this->db || !$this->db->query('SELECT 1')) {
-                // Reconnect if query fails
                 $this->connectToDatabase();
             }
         } catch (PDOException $e) {
             echo "Database connection check failed: " . $e->getMessage() . "\n";
-            // Reconnect
             $this->connectToDatabase();
         }
     }
@@ -109,19 +111,18 @@ class GameSocket
             $server->close($request->fd);
             return;
         }
-        // Extract gameId and PlayerId on connection to game
+
         parse_str($request->server['query_string'], $params);
         if (!isset($params['player_id']) || !isset($params['game_id'])) {
             echo "\nServer disconnected; no player_id and game_id added";
             $server->close($request->fd);
             return;
         }
-        // Initialize and set the params
+
         $player_id = (int)$params['player_id'];
         $game_id = (int)$params['game_id'];
 
         try {
-            // Ensure database connection is active before querying
             $this->ensureDbConnection();
             $stmt = $this->db->prepare("SELECT * FROM games_players WHERE gameId = ? AND userId = ?");
             $stmt->execute([$game_id, $player_id]);
@@ -139,29 +140,22 @@ class GameSocket
                 'player_id' => $player_id
             ]);
 
-            // Update or initialize game info
-            if (!$this->gameTable->exists($game_id)) {
-                $this->gameTable->set($game_id, [
-                    'player_count' => 1,
-                    'active' => 1
-                ]);
-            } else {
-                $gameInfo = $this->gameTable->get($game_id);
-                $this->gameTable->set($game_id, [
-                    'player_count' => $gameInfo['player_count'] + 1,
-                    'active' => 1
-                ]);
-            }
+            // Update game info and player list
+            $this->addPlayerToGame($game_id, $player_id);
 
             // Log connection info
             echo "\nPlayer {$player_id} connected to game {$game_id} with fd {$request->fd}";
             $this->printConnectionStatus();
 
+            // Get all connected players for this game
+            $connectedPlayers = $this->getConnectedPlayers($game_id);
+
             // Notify player on successful connection
             $server->push($request->fd, json_encode([
                 'status' => 'Connected',
                 'message' => "Player connected to game {$game_id}",
-                // 'players' => $this->gameTable->get($game_id)['player_count'],
+                'connected_players' => $connectedPlayers,
+                'player_count' => count($connectedPlayers),
             ]));
 
             // Broadcast to other players about the new connection
@@ -169,6 +163,8 @@ class GameSocket
                 'action' => 'playerConnected',
                 'status' => 'connection',
                 'player_id' => $player_id,
+                'connected_players' => $connectedPlayers,
+                'player_count' => count($connectedPlayers),
                 'message' => "New player {$player_id} connected"
             ], $request->fd);
         } catch (PDOException $e) {
@@ -176,6 +172,72 @@ class GameSocket
             $server->close($request->fd);
             return;
         }
+    }
+
+    /**
+     * Adds a player to the game's player list
+     */
+    private function addPlayerToGame(int $game_id, int $player_id): void
+    {
+        // Initialize or update game info
+        if (!$this->gameTable->exists($game_id)) {
+            $this->gameTable->set($game_id, [
+                'player_count' => 1,
+                'active' => 1
+            ]);
+            $this->playersTable->set($game_id, [
+                'player_ids' => (string)$player_id
+            ]);
+        } else {
+            $gameInfo = $this->gameTable->get($game_id);
+            $this->gameTable->set($game_id, [
+                'player_count' => $gameInfo['player_count'] + 1,
+                'active' => 1
+            ]);
+
+            // Add player to the players list if not already present
+            $players = $this->playersTable->get($game_id);
+            $playerIds = explode(',', $players['player_ids']);
+            if (!in_array($player_id, $playerIds)) {
+                $playerIds[] = $player_id;
+                $this->playersTable->set($game_id, [
+                    'player_ids' => implode(',', $playerIds)
+                ]);
+            }
+        }
+    }
+
+    /**
+     * Removes a player from the game's player list
+     */
+    private function removePlayerFromGame(int $game_id, int $player_id): void
+    {
+        if ($this->playersTable->exists($game_id)) {
+            $players = $this->playersTable->get($game_id);
+            $playerIds = explode(',', $players['player_ids']);
+            $playerIds = array_filter($playerIds, fn($id) => $id != $player_id);
+
+            $this->playersTable->set($game_id, [
+                'player_ids' => implode(',', $playerIds)
+            ]);
+        }
+    }
+
+    /**
+     * Gets all connected player IDs for a game
+     */
+    public function getConnectedPlayers(int $game_id): array
+    {
+        if (!$this->playersTable->exists($game_id)) {
+            return [];
+        }
+
+        $players = $this->playersTable->get($game_id);
+        if (empty($players['player_ids'])) {
+            return [];
+        }
+
+        return array_map('intval', explode(',', $players['player_ids']));
     }
 
     public function onMessage(Server $server, Frame $frame)
@@ -198,6 +260,9 @@ class GameSocket
             ]));
             return;
         }
+
+        // Add connected players to the data before processing
+        $data['connected_players'] = $this->getConnectedPlayers($game_id);
 
         // Push messages based on actions
         switch ($data['action']) {
@@ -236,7 +301,7 @@ class GameSocket
         }
     }
 
-    // Game Actions Methods
+    // Game Actions Methods (unchanged except they'll now include connected_players in broadcasts)
     public function updatePlayers(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
@@ -327,14 +392,12 @@ class GameSocket
         $this->broadcastToGame($server, $data['game_id'], $data, $fd);
     }
 
-    // Method to start the socket server
     public function start()
     {
         echo "WebSocket server started on port 9002\n";
         $this->server->start();
     }
 
-    // Method that handles disconnections
     public function onClose(Server $server, int $fd)
     {
         echo "\nConnection closed: fd={$fd}";
@@ -355,6 +418,9 @@ class GameSocket
         // Remove from connection table
         $this->connectionTable->del($fd);
 
+        // Remove player from the game's player list
+        $this->removePlayerFromGame($game_id, $player_id);
+
         // Update game player count
         if ($this->gameTable->exists($game_id)) {
             $gameInfo = $this->gameTable->get($game_id);
@@ -366,11 +432,16 @@ class GameSocket
                     'active' => 1
                 ]);
 
+                // Get updated player list
+                $connectedPlayers = $this->getConnectedPlayers($game_id);
+
                 // Notify remaining players
                 $this->broadcastToGame($server, $game_id, [
                     'action' => 'playerDisconnected',
                     'status' => 'Disconnected',
                     'player_id' => $player_id,
+                    'connected_players' => $connectedPlayers,
+                    'player_count' => $newCount,
                     'message' => "Player {$player_id} has left the game"
                 ]);
             } else {
@@ -385,7 +456,6 @@ class GameSocket
         $this->printConnectionStatus();
     }
 
-    // Helper method to print current connection status
     private function printConnectionStatus()
     {
         echo "\n--- Current Connections ---";
@@ -397,6 +467,12 @@ class GameSocket
         echo "\nGames:";
         foreach ($this->gameTable as $game_id => $info) {
             echo "\n  game: {$game_id}, players: {$info['player_count']}, active: {$info['active']}";
+        }
+
+        echo "\nPlayers per game:";
+        foreach ($this->playersTable as $game_id => $info) {
+            $players = $this->getConnectedPlayers($game_id);
+            echo "\n  game: {$game_id}, players: " . implode(', ', $players);
         }
         echo "\n--------------------------";
     }
@@ -412,12 +488,12 @@ class GameSocket
         return $liveGames;
     }
 
-    // Method to broadcast data to all players in a game
     public function broadcastToGame($server, $game_id, $data, $exclude = null)
     {
         echo "\nBroadcasting to game {$game_id}";
 
         $player_id = $data['player_id'] ?? 'unknown';
+        $connectedPlayers = $this->getConnectedPlayers($game_id);
 
         // Determine the broadcast message based on the action
         $message = match ($data['action'] ?? '') {
@@ -442,12 +518,15 @@ class GameSocket
             if ($info['game_id'] == $game_id && ($exclude === null || $fd != $exclude)) {
                 $recipients++;
                 echo "\nBroadcasting to fd = {$fd}, player = {$info['player_id']}: {$message}";
-                // Send the data along with a user-friendly message
+
+                // Include connected players in every broadcast
                 $server->push($fd, json_encode([
                     "status" => "notification",
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? $recipients + 1,
+                    "data" => $data['data'] ?? null,
+                    "connected_players" => $connectedPlayers,
+                    "player_count" => count($connectedPlayers),
                     "live_games" => $this->getLiveGames(),
                 ]));
             }
