@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Get full commit history for verification
 
       - name: Setup SSH Key
         run: |
@@ -25,56 +27,78 @@ jobs:
 
       - name: Create deployment archive
         run: |
-          tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
+          # Get the current commit hash for verification
+          echo "COMMIT_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+          
+          # Create archive using git to ensure all tracked files are included
+          git archive --format=tar HEAD | gzip > deploy.tar.gz
 
       - name: Upload and deploy to server
         run: |
-          # Upload archive and write remote script
+          # Upload archive
           scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp.tar.gz
 
+          # Execute deployment with sudo password handling preserved
           ssh -i ~/.ssh/deploy_key ludo@20.169.153.179 "bash -s" <<'EOF'
-            set -e
+            set -ex
 
             export SUDO_PASS="${{ secrets.LUDO_SSH_PASSWORD }}"
-            SUDO="echo $SUDO_PASS | sudo -S"
+            SUDO="echo \$SUDO_PASS | sudo -S"
 
-            # Prep deployment
+            # Create temp directory
             rm -rf /tmp/deploy_temp
             mkdir -p /tmp/deploy_temp
+            
+            # Extract archive
             tar -xzf /tmp/deploy_temp.tar.gz -C /tmp/deploy_temp
 
-            # Backup old release
-            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            $SUDO mkdir -p /var/opt/sockets/backups
-            $SUDO tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+            # Verify extracted files
+            echo "=== Files in deployment package ==="
+            ls -la /tmp/deploy_temp | head -20
+            echo "Total files: \$(find /tmp/deploy_temp -type f | wc -l)"
 
-            # Preserve .env if present
+            # Backup current deployment
+            TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
+            \$SUDO mkdir -p /var/opt/sockets/backups
+            \$SUDO tar -czf /var/opt/sockets/backups/backup_\${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+
+            # Preserve .env if exists
             if [ -f "/var/opt/sockets/.env" ]; then
-              cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
-            fi
-
-            # Deploy new code
-            $SUDO rsync -av --exclude="backups" --exclude=".env" --delete /tmp/deploy_temp/ /var/opt/sockets/
-
-            # Restore .env or use fallback
-            if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
-              $SUDO cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
+              cp /var/opt/sockets/.env /tmp/deploy_temp/
               echo "Preserved existing .env file"
-            elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
-              $SUDO cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
-              echo "Created .env from .env.Example"
             fi
 
-            # Install dependencies and fix permissions
+            # Sync files with verification
+            echo "=== Syncing files ==="
+            \$SUDO rsync -avc --delete \
+              --exclude="backups" \
+              --exclude=".env" \
+              /tmp/deploy_temp/ /var/opt/sockets/
+
+            # Verify synced files
+            echo "=== Files in production ==="
+            \$SUDO ls -la /var/opt/sockets | head -20
+            echo "Total files: \$(find /var/opt/sockets -type f | wc -l)"
+
+            # Install dependencies
             cd /var/opt/sockets
-            composer install --no-dev --optimize-autoloader
-            $SUDO chown -R www-data:www-data /var/opt/sockets
-            $SUDO chmod -R 755 /var/opt/sockets
+            \$SUDO composer install --no-dev --optimize-autoloader
+
+            # Set permissions
+            \$SUDO chown -R www-data:www-data /var/opt/sockets
+            \$SUDO chmod -R 755 /var/opt/sockets
+
+            # Verify deployment
+            echo "=== Deployment Verification ==="
+            echo "Deployed commit: $COMMIT_SHA"
+            if [ -f "/var/opt/sockets/composer.json" ]; then
+              echo "Current version: \$(jq -r '.version' /var/opt/sockets/composer.json 2>/dev/null || echo 'N/A')"
+            fi
 
             # Restart service
-            $SUDO supervisorctl restart gamesocket
+            \$SUDO supervisorctl restart gamesocket
 
-            # Clean up
+            # Cleanup
             rm -rf /tmp/deploy_temp /tmp/deploy_temp.tar.gz
             echo "Deployment completed successfully"
           EOF
