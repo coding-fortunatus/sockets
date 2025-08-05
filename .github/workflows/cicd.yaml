@@ -40,19 +40,19 @@ jobs:
             
             # Backup current code and .env file
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            sudo mkdir -p /var/opt/sockets/backups
-            sudo tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+            mkdir -p /var/opt/sockets/backups
+            tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
             if [ -f "/var/opt/sockets/.env" ]; then
               cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
             fi
-            sudo rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
+            rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
             
             # Put back the preserved .env file
             if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
-              sudo cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
+              cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
               echo "Preserved existing .env file"
             elif [ -f "/tmp/deploy_temp/.env.example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
-              sudo cp /tmp/deploy_temp/.env.example /var/opt/sockets/.env
+              cp /tmp/deploy_temp/.env.example /var/opt/sockets/.env
               echo "Created .env from .env.example"
             fi
             
@@ -61,28 +61,28 @@ jobs:
             composer install --no-dev --optimize-autoloader
             
             # Set permissions
-            sudo chown -R www-data:www-data /var/opt/sockets
-            sudo chmod -R 755 /var/opt/sockets
+            chown -R www-data:www-data /var/opt/sockets
+            chmod -R 755 /var/opt/sockets
             
             # Supervisor process management
             echo "=== Current Supervisor Status ==="
-            sudo supervisorctl status
+            supervisorctl status
             
             echo "=== Updating Supervisor ==="
-            sudo supervisorctl update
+            supervisorctl update
             
             echo "=== Restarting Process ==="
-            if sudo supervisorctl status | grep -q 'gamesocket'; then
+            if supervisorctl status | grep -q 'gamesocket'; then
               echo "Restarting specific gamesocket process..."
-              sudo supervisorctl restart gamesocket
+              supervisorctl restart gamesocket
             else
               echo "gamesocket process not found, restarting all..."
-              sudo supervisorctl restart all
+              supervisorctl restart all
             fi
             
             echo "=== Verifying Restart ==="
             sleep 3  # Give it time to restart
-            sudo supervisorctl status
+            supervisorctl status
             
             # Cleanup
             cd ~
