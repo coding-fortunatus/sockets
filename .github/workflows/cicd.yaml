@@ -15,59 +15,66 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-      
-      - name: Setup Deploy Key
+
+      - name: Setup SSH Key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "echo Connection test successful"
-      
-      - name: Deploy to production
+
+      - name: Create deployment archive
         run: |
-          # Create deployment directory
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
-          
-          # Archive project and send to server
           tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
-          scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
-          
-          # Run deployment commands remotely
-          ssh -tt -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "bash -s" <<EOF
+
+      - name: Upload and deploy to server
+        run: |
+          # Upload archive and write remote script
+          scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp.tar.gz
+
+          ssh -i ~/.ssh/deploy_key ludo@20.169.153.179 "bash -s" <<'EOF'
+            set -e
+
             export SUDO_PASS="${{ secrets.LUDO_SSH_PASSWORD }}"
-            SUDO="echo \$SUDO_PASS | sudo -S"
+            SUDO="echo $SUDO_PASS | sudo -S"
 
-            cd /tmp/deploy_temp
-            tar -xzf deploy.tar.gz
+            # Prep deployment
+            rm -rf /tmp/deploy_temp
+            mkdir -p /tmp/deploy_temp
+            tar -xzf /tmp/deploy_temp.tar.gz -C /tmp/deploy_temp
 
-            TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
-            \$SUDO mkdir -p /var/opt/sockets/backups
-            \$SUDO tar -czf /var/opt/sockets/backups/backup_\${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+            # Backup old release
+            TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+            $SUDO mkdir -p /var/opt/sockets/backups
+            $SUDO tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
 
+            # Preserve .env if present
             if [ -f "/var/opt/sockets/.env" ]; then
               cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
             fi
 
-            \$SUDO rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
+            # Deploy new code
+            $SUDO rsync -av --exclude="backups" --exclude=".env" --delete /tmp/deploy_temp/ /var/opt/sockets/
 
+            # Restore .env or use fallback
             if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
-              \$SUDO cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
+              $SUDO cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
               echo "Preserved existing .env file"
             elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
-              \$SUDO cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
+              $SUDO cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
               echo "Created .env from .env.Example"
             fi
 
+            # Install dependencies and fix permissions
             cd /var/opt/sockets
             composer install --no-dev --optimize-autoloader
+            $SUDO chown -R www-data:www-data /var/opt/sockets
+            $SUDO chmod -R 755 /var/opt/sockets
 
-            \$SUDO chown -R www-data:www-data /var/opt/sockets
-            \$SUDO chmod -R 755 /var/opt/sockets
-            \$SUDO supervisorctl restart gamesocket
+            # Restart service
+            $SUDO supervisorctl restart gamesocket
 
-            cd ~
-            rm -rf /tmp/deploy_temp
-
+            # Clean up
+            rm -rf /tmp/deploy_temp /tmp/deploy_temp.tar.gz
             echo "Deployment completed successfully"
           EOF
