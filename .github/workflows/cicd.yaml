@@ -17,22 +17,24 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          
+          # Add server to known_hosts
           ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
           
-          # Verify connection
-          ssh -o IdentitiesOnly=yes -i ~/.ssh/deploy_key ludo@20.169.153.179 "echo 'SSH connection successful'"
+          # Test connection with sudo
+          ssh -i ~/.ssh/deploy_key ludo@20.169.153.179 "sudo -n true || { echo 'Sudo access failed'; exit 1; }"
           
       - name: Deploy to production
         run: |
-          # Create archive with ignore-failed-read to prevent errors
+          # Create archive (ignore warnings)
           tar --exclude='.git' --exclude='node_modules' --exclude='.github' \
-              --ignore-failed-read -czf deploy.tar.gz . || true
+              --warning=no-file-changed -czf deploy.tar.gz . || true
           
           # Transfer files
-          scp -o IdentitiesOnly=yes -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/
+          scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/
           
-          # Execute deployment commands
-          ssh -o IdentitiesOnly=yes -i ~/.ssh/deploy_key ludo@20.169.153.179 << 'EOF'
+          # Execute deployment commands with pseudo-terminal
+          ssh -tt -i ~/.ssh/deploy_key ludo@20.169.153.179 << 'EOF'
             set -ex
             
             # Create deployment directory
@@ -40,18 +42,18 @@ jobs:
             
             # Backup existing deployment
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            sudo tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets . 2>/dev/null || true
+            sudo tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets . || true
             
             # Extract new files
             sudo mkdir -p /tmp/deployment
             sudo tar -xzf /tmp/deploy.tar.gz -C /tmp/deployment
             
-            # Preserve environment file if exists
+            # Preserve environment file
             if [ -f "/var/opt/sockets/.env" ]; then
-              sudo cp /var/opt/sockets/.env /tmp/deployment/.env
+              sudo cp /var/opt/sockets/.env /tmp/deployment/
             fi
             
-            # Sync files (excluding backups)
+            # Sync files
             sudo rsync -a --delete --exclude='backups' /tmp/deployment/ /var/opt/sockets/
             
             # Set permissions
