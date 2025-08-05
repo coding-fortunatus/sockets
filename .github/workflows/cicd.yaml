@@ -3,9 +3,7 @@ name: Ludo Game Socket CI/CD Pipeline
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:  # Allows manual triggering of the workflow
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -14,79 +12,59 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
       
-      - name: Setup Deploy Key
+      - name: Setup SSH
         run: |
-          # Create .ssh directory
           mkdir -p ~/.ssh
-          
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          
+          # Add server to known_hosts
           ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "echo Connection test successful"
-      
+          
+          # Test connection with explicit key usage
+          ssh -o IdentitiesOnly=yes -i ~/.ssh/deploy_key ludo@20.169.153.179 "echo 'SSH connection successful'"
+          
       - name: Deploy to production
         run: |
-          # Create a temporary deployment directory and archive the current state of the repository
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
-          tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
-          scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
+          # Create archive
+          tar --exclude='.git' --exclude='node_modules' --exclude='.github' -czf deploy.tar.gz .
           
-          # Deploy script on the remote server
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 << 'ENDSSH'
-            set -e  # Exit immediately if any command fails
+          # Transfer files with explicit key usage
+          scp -o IdentitiesOnly=yes -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/
+          
+          # Execute deployment commands
+          ssh -o IdentitiesOnly=yes -i ~/.ssh/deploy_key ludo@20.169.153.179 << 'EOF'
+            set -ex
             
-            cd /tmp/deploy_temp
-            tar -xzf deploy.tar.gz
+            # Create deployment directory
+            sudo mkdir -p /var/opt/sockets
+            sudo mkdir -p /var/opt/sockets/backups
             
-            # Backup current code and .env file
+            # Backup existing deployment
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            mkdir -p /var/opt/sockets/backups
-            tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
-            if [ -f "/var/opt/sockets/.env" ]; then
-              cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
-            fi
-            rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
+            sudo tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
             
-            # Put back the preserved .env file
-            if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
-              cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
-              echo "Preserved existing .env file"
-            elif [ -f "/tmp/deploy_temp/.env.example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
-              cp /tmp/deploy_temp/.env.example /var/opt/sockets/.env
-              echo "Created .env from .env.example"
+            # Extract new files
+            sudo tar -xzf /tmp/deploy.tar.gz -C /var/opt/sockets
+            
+            # Preserve environment file if exists
+            if [ -f "/var/opt/sockets/.env" ]; then
+              sudo cp /var/opt/sockets/.env /var/opt/sockets/.env.bak
             fi
+            
+            # Set permissions
+            sudo chown -R www-data:www-data /var/opt/sockets
+            sudo chmod -R 755 /var/opt/sockets
             
             # Install dependencies
             cd /var/opt/sockets
-            composer install --no-dev --optimize-autoloader
+            sudo composer install --no-dev --optimize-autoloader
             
-            # Set permissions
-            chown -R www-data:www-data /var/opt/sockets
-            chmod -R 755 /var/opt/sockets
-            
-            # Supervisor process management
-            echo "=== Current Supervisor Status ==="
-            supervisorctl status
-            
-            echo "=== Updating Supervisor ==="
-            supervisorctl update
-            
-            echo "=== Restarting Process ==="
-            if supervisorctl status | grep -q 'gamesocket'; then
-              echo "Restarting specific gamesocket process..."
-              supervisorctl restart gamesocket
-            else
-              echo "gamesocket process not found, restarting all..."
-              supervisorctl restart all
-            fi
-            
-            echo "=== Verifying Restart ==="
-            sleep 3  # Give it time to restart
-            supervisorctl status
+            # Restart services
+            sudo supervisorctl update
+            sudo supervisorctl restart gamesocket || sudo supervisorctl restart all
             
             # Cleanup
-            cd ~
-            rm -rf /tmp/deploy_temp
-            
+            sudo rm -f /tmp/deploy.tar.gz
             echo "Deployment completed successfully"
-          ENDSSH
+          EOF
