@@ -133,23 +133,18 @@ class GameSocket
                 $server->close($request->fd);
                 return;
             }
-
             // Store connection in the shared table
             $this->connectionTable->set($request->fd, [
                 'game_id' => $game_id,
                 'player_id' => $player_id
             ]);
-
             // Update game info and player list
             $this->addPlayerToGame($game_id, $player_id);
-
             // Log connection info
             echo "\nPlayer {$player_id} connected to game {$game_id} with fd {$request->fd}";
             $this->printConnectionStatus();
-
             // Get all connected players for this game
             $connectedPlayers = $this->getConnectedPlayers($game_id);
-
             // Notify player on successful connection
             $server->push($request->fd, json_encode([
                 'status' => 'notification',
@@ -161,7 +156,6 @@ class GameSocket
                 'game_id' => $game_id,
                 'live_games' => $this->getLiveGames()
             ]));
-
             // Broadcast to other players about the new connection
             $this->broadcastToGame($server, $game_id, [
                 'action' => 'playerConnected',
