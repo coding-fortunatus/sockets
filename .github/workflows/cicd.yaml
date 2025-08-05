@@ -1,69 +1,69 @@
 name: Ludo Game Socket CI/CD Pipeline
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
-  workflow_dispatch:
+    push:
+        branches: [main, master]
+    pull_request:
+        branches: [main, master]
+    workflow_dispatch:
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    env:
-      SUDO_PASS: ${{ secrets.LUDO_SSH_PASSWORD }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+    deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-      - name: Setup SSH key and known hosts
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
+            - name: Setup SSH key and known hosts
+              run: |
+                  mkdir -p ~/.ssh
+                  echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+                  chmod 600 ~/.ssh/deploy_key
+                  ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
 
-      - name: Archive and transfer code
-        run: |
-          tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
-          scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
+            - name: Archive and transfer code
+              run: |
+                  tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
+                  ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
+                  scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
 
-      - name: Remote Deploy via SSH
-        run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 bash <<EOF
-            set -e
-            
-            cd /tmp/deploy_temp
-            tar -xzf deploy.tar.gz
+            - name: Remote Deploy via SSH
+              run: |
+                  ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 'bash -s' <<'EOF'
+                    SUDO_PASS="${{ secrets.LUDO_SSH_PASSWORD }}"
 
-            TIMESTAMP=\$(date +%Y%m%d_%H%M%S)
-            echo "\$SUDO_PASS" | sudo -S mkdir -p /var/opt/sockets/backups
-            echo "\$SUDO_PASS" | sudo -S tar -czf /var/opt/sockets/backups/backup_\${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+                    set -e
 
-            if [ -f "/var/opt/sockets/.env" ]; then
-              cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
-            fi
+                    cd /tmp/deploy_temp
+                    tar -xzf deploy.tar.gz
 
-            echo "\$SUDO_PASS" | sudo -S rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
+                    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+                    echo "$SUDO_PASS" | sudo -S mkdir -p /var/opt/sockets/backups
+                    echo "$SUDO_PASS" | sudo -S tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
 
-            if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
-              echo "\$SUDO_PASS" | sudo -S cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
-              echo "Preserved existing .env file"
-            elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
-              echo "\$SUDO_PASS" | sudo -S cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
-              echo "Created .env from .env.Example"
-            fi
+                    if [ -f "/var/opt/sockets/.env" ]; then
+                      cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
+                    fi
 
-            cd /var/opt/sockets
-            composer install --no-dev --optimize-autoloader
+                    echo "$SUDO_PASS" | sudo -S rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
 
-            echo "\$SUDO_PASS" | sudo -S chown -R www-data:www-data /var/opt/sockets
-            echo "\$SUDO_PASS" | sudo -S chmod -R 755 /var/opt/sockets
+                    if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
+                      echo "$SUDO_PASS" | sudo -S cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
+                      echo "Preserved existing .env file"
+                    elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
+                      echo "$SUDO_PASS" | sudo -S cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
+                      echo "Created .env from .env.Example"
+                    fi
 
-            echo "\$SUDO_PASS" | sudo -S supervisorctl restart gamesocket
+                    cd /var/opt/sockets
+                    composer install --no-dev --optimize-autoloader
 
-            rm -rf /tmp/deploy_temp
+                    echo "$SUDO_PASS" | sudo -S chown -R www-data:www-data /var/opt/sockets
+                    echo "$SUDO_PASS" | sudo -S chmod -R 755 /var/opt/sockets
 
-            echo "✅ Deployment completed"
-          EOF
+                    echo "$SUDO_PASS" | sudo -S supervisorctl restart gamesocket
+
+                    rm -rf /tmp/deploy_temp
+
+                    echo "✅ Deployment completed"
+                  EOF
