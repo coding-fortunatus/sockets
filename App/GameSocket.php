@@ -21,7 +21,7 @@ class GameSocket
     protected Server $server;
     protected Table $connectionTable;
     protected Table $gameTable;
-    protected Table $playersTable; // New table to track players per game
+    protected Table $playersTable;
 
     private static array $config = [
         'host' => '',
@@ -47,12 +47,12 @@ class GameSocket
         // Create shared table for game tracking
         $this->gameTable = new Table(256);
         $this->gameTable->column('player_count', Table::TYPE_INT);
-        $this->gameTable->column('active', Table::TYPE_INT, 1); // 1 = active, 0 = inactive
+        $this->gameTable->column('active', Table::TYPE_INT, 1);
         $this->gameTable->create();
 
-        // New table to track players in each game (game_id => player_id1,player_id2,...)
+        // Create table to track players in each game
         $this->playersTable = new Table(256);
-        $this->playersTable->column('player_ids', Table::TYPE_STRING, 1024); // CSV of player IDs
+        $this->playersTable->column('player_ids', Table::TYPE_STRING, 1024);
         $this->playersTable->create();
 
         // Initialize Open Swoole Server
@@ -62,7 +62,7 @@ class GameSocket
         $this->server->on('close', [$this, "onClose"]);
 
         self::$config['host'] = $_ENV['DB_HOST'];
-        self::$config['port']     = $_ENV['DB_PORT'];
+        self::$config['port'] = $_ENV['DB_PORT'];
         self::$config['dbname'] = $_ENV['DB_NAME'];
         self::$config['user'] = $_ENV['DB_USER'];
         self::$config['password'] = $_ENV['DB_PASSWORD'];
@@ -152,20 +152,26 @@ class GameSocket
 
             // Notify player on successful connection
             $server->push($request->fd, json_encode([
-                'status' => 'Connected',
-                'message' => "Player connected to game {$game_id}",
+                'status' => 'notification',
+                'message' => "You have connected to game {$game_id}",
+                'action' => 'playerConnected',
                 'connected_players' => $connectedPlayers,
                 'player_count' => count($connectedPlayers),
+                'player_id' => $player_id,
+                'game_id' => $game_id,
+                'live_games' => $this->getLiveGames()
             ]));
 
             // Broadcast to other players about the new connection
             $this->broadcastToGame($server, $game_id, [
                 'action' => 'playerConnected',
-                'status' => 'connection',
+                'status' => 'notification',
                 'player_id' => $player_id,
+                'game_id' => $game_id,
                 'connected_players' => $connectedPlayers,
                 'player_count' => count($connectedPlayers),
-                'message' => "New player {$player_id} connected"
+                'message' => "New player {$player_id} connected",
+                'live_games' => $this->getLiveGames()
             ], $request->fd);
         } catch (PDOException $e) {
             echo "\nDatabase error during connection: " . $e->getMessage();
@@ -174,12 +180,8 @@ class GameSocket
         }
     }
 
-    /**
-     * Adds a player to the game's player list
-     */
     private function addPlayerToGame(int $game_id, int $player_id): void
     {
-        // Initialize or update game info
         if (!$this->gameTable->exists($game_id)) {
             $this->gameTable->set($game_id, [
                 'player_count' => 1,
@@ -195,7 +197,6 @@ class GameSocket
                 'active' => 1
             ]);
 
-            // Add player to the players list if not already present
             $players = $this->playersTable->get($game_id);
             $playerIds = explode(',', $players['player_ids']);
             if (!in_array($player_id, $playerIds)) {
@@ -207,9 +208,6 @@ class GameSocket
         }
     }
 
-    /**
-     * Removes a player from the game's player list
-     */
     private function removePlayerFromGame(int $game_id, int $player_id): void
     {
         if ($this->playersTable->exists($game_id)) {
@@ -223,9 +221,6 @@ class GameSocket
         }
     }
 
-    /**
-     * Gets all connected player IDs for a game
-     */
     public function getConnectedPlayers(int $game_id): array
     {
         if (!$this->playersTable->exists($game_id)) {
@@ -251,7 +246,6 @@ class GameSocket
         $game_id = (int)$data['game_id'];
         $player_id = (int)$data['player_id'];
 
-        // Verify that the player is connected to this game
         $connection = $this->connectionTable->get($frame->fd);
         if (!$connection || $connection['game_id'] !== $game_id || $connection['player_id'] !== $player_id) {
             $server->push($frame->fd, json_encode([
@@ -264,7 +258,6 @@ class GameSocket
         // Add connected players to the data before processing
         $data['connected_players'] = $this->getConnectedPlayers($game_id);
 
-        // Push messages based on actions
         switch ($data['action']) {
             case "updatePlayers":
                 $this->updatePlayers($server, $frame->fd, $data);
@@ -301,7 +294,6 @@ class GameSocket
         }
     }
 
-    // Game Actions Methods (unchanged except they'll now include connected_players in broadcasts)
     public function updatePlayers(Server $server, int $fd, $data)
     {
         if (!isset($data['game_id']) || !isset($data['player_id']) || !isset($data['data'])) {
@@ -402,26 +394,20 @@ class GameSocket
     {
         echo "\nConnection closed: fd={$fd}";
 
-        // Check if this connection exists in our table
         if (!$this->connectionTable->exists($fd)) {
             echo "\nConnection not found in table: fd={$fd}";
             return;
         }
 
-        // Get connection details
         $connection = $this->connectionTable->get($fd);
         $game_id = $connection['game_id'];
         $player_id = $connection['player_id'];
 
         echo "\nPlayer {$player_id} disconnected from game {$game_id}";
 
-        // Remove from connection table
         $this->connectionTable->del($fd);
-
-        // Remove player from the game's player list
         $this->removePlayerFromGame($game_id, $player_id);
 
-        // Update game player count
         if ($this->gameTable->exists($game_id)) {
             $gameInfo = $this->gameTable->get($game_id);
             $newCount = max(0, $gameInfo['player_count'] - 1);
@@ -432,20 +418,18 @@ class GameSocket
                     'active' => 1
                 ]);
 
-                // Get updated player list
                 $connectedPlayers = $this->getConnectedPlayers($game_id);
 
-                // Notify remaining players
                 $this->broadcastToGame($server, $game_id, [
                     'action' => 'playerDisconnected',
-                    'status' => 'Disconnected',
+                    'status' => 'notification',
                     'player_id' => $player_id,
                     'connected_players' => $connectedPlayers,
                     'player_count' => $newCount,
-                    'message' => "Player {$player_id} has left the game"
+                    'message' => "Player {$player_id} has left the game",
+                    'live_games' => $this->getLiveGames()
                 ]);
             } else {
-                // If no players left, mark game as inactive or remove it
                 $this->gameTable->set($game_id, [
                     'player_count' => 0,
                     'active' => 0
@@ -495,7 +479,6 @@ class GameSocket
         $player_id = $data['player_id'] ?? 'unknown';
         $connectedPlayers = $this->getConnectedPlayers($game_id);
 
-        // Determine the broadcast message based on the action
         $message = match ($data['action'] ?? '') {
             'playerConnected' => "Player {$player_id} has joined the game",
             'playerDisconnected' => "Player {$player_id} has left the game",
@@ -512,22 +495,21 @@ class GameSocket
             default => "Player {$player_id} performed an action"
         };
 
-        // Find all connections for this game
         $recipients = 0;
         foreach ($this->connectionTable as $fd => $info) {
             if ($info['game_id'] == $game_id && ($exclude === null || $fd != $exclude)) {
                 $recipients++;
                 echo "\nBroadcasting to fd = {$fd}, player = {$info['player_id']}: {$message}";
 
-                // Include connected players in every broadcast
                 $server->push($fd, json_encode([
-                    "status" => "notification",
+                    "status" => $data['status'] ?? 'notification',
                     "message" => $message,
                     "action" => $data['action'],
-                    "data" => $data['data'] ?? null,
-                    "connected_players" => $connectedPlayers,
-                    "player_count" => count($connectedPlayers),
-                    "live_games" => $this->getLiveGames(),
+                    "connected_players" => $data['connected_players'],
+                    "player_count" => $data['player_count'],
+                    "player_id" => $data['player_id'],
+                    "game_id" => $game_id,
+                    "live_games" => $data['live_games'] ?? $this->getLiveGames(),
                 ]));
             }
         }
