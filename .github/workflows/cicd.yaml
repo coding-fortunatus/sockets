@@ -5,81 +5,81 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:
+  workflow_dispatch:    # Allows manual triggering of the workflow
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      SUDO_PASS: ${{ secrets.LUDO_SSH_PASSWORD }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
+      
       - name: Setup Deploy Key
         run: |
+          # Create .ssh directory
           mkdir -p ~/.ssh
+          
+          # Add the deployment key from secrets (generate this locally without passphrase)
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          
+          # Add server to known hosts
           ssh-keyscan -H 20.169.153.179 >> ~/.ssh/known_hosts
+          
+          # Test the connection
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "echo Connection test successful"
       
       - name: Deploy to production
         run: |
-          # Archive project excluding dev files
-          tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
-          
-          # Create remote directory and upload
+          # Create a temporary deployment directory
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "mkdir -p /tmp/deploy_temp"
+          
+          # Archive the project excluding development files and transfer to the server
+          tar --exclude='.git' --exclude='node_modules' --exclude='.github' --ignore-failed-read -czf deploy.tar.gz .
           scp -i ~/.ssh/deploy_key deploy.tar.gz ludo@20.169.153.179:/tmp/deploy_temp/
           
-          # SSH into server and deploy
-          ssh -tt -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 "bash -s" <<'EOF'
-            export SUDO_PASS="${SUDO_PASS}"
-            SUDO="echo $SUDO_PASS | sudo -S"
-
+          # Deploy script on the remote server
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no ludo@20.169.153.179 << 'ENDSSH'
             cd /tmp/deploy_temp
             tar -xzf deploy.tar.gz
-
-            # If archive extracted into a subfolder, cd into it
-            SUBDIR=$(tar -tzf deploy.tar.gz | head -1 | cut -f1 -d"/")
-            cd "$SUBDIR"
-
-            # Backup live code
+            
+            # Backup current code and .env file
             TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-            $SUDO mkdir -p /var/opt/sockets/backups
-            $SUDO tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
-
-            # Preserve .env if it exists
+            sudo mkdir -p /var/opt/sockets/backups
+            sudo tar -czf /var/opt/sockets/backups/backup_${TIMESTAMP}.tar.gz -C /var/opt/sockets .
+            
+            # Preserve .env file by copying it from the server to our temp directory
             if [ -f "/var/opt/sockets/.env" ]; then
-              $SUDO cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
+              cp /var/opt/sockets/.env /tmp/deploy_temp/.env.preserved
             fi
-
-            # Deploy new code
-            $SUDO rsync -avz --checksum --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
-
-            # Restore or create .env
+            
+            # Deploy new code but exclude .env if it exists on the server
+            sudo rsync -av --exclude="backups" --exclude=".env" --delete ./ /var/opt/sockets/
+            
+            # Put back the preserved .env file
             if [ -f "/tmp/deploy_temp/.env.preserved" ]; then
-              $SUDO cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
+              sudo cp /tmp/deploy_temp/.env.preserved /var/opt/sockets/.env
               echo "Preserved existing .env file"
-            elif [ -f "./.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
-              $SUDO cp .env.Example /var/opt/sockets/.env
+            elif [ -f "/tmp/deploy_temp/.env.Example" ] && [ ! -f "/var/opt/sockets/.env" ]; then
+              # If no .env exists but we have an example, copy it as a starting point
+              sudo cp /tmp/deploy_temp/.env.Example /var/opt/sockets/.env
               echo "Created .env from .env.Example"
             fi
-
-            # Final setup
+            
+            # Install composer dependencies on the server (where OpenSwoole is already installed)
             cd /var/opt/sockets
             composer install --no-dev --optimize-autoloader
-
-            $SUDO chown -R www-data:www-data /var/opt/sockets
-            $SUDO chmod -R 755 /var/opt/sockets
-            $SUDO supervisorctl restart gamesocket
-
-            # Deployment timestamp
-            echo "Deployed at: $(date)" | $SUDO tee /var/opt/sockets/DEPLOYED_AT.txt
-
-            # Clean up
+            
+            # Set appropriate permissions
+            sudo chown -R www-data:www-data /var/opt/sockets
+            sudo chmod -R 755 /var/opt/sockets
+            
+            # Restart supervisor to apply changes
+            sudo supervisorctl restart gamesocket
+            
+            # Clean up temporary deployment files
             cd ~
             rm -rf /tmp/deploy_temp
-
+            
             echo "Deployment completed successfully"
-          EOF
+          ENDSSH
