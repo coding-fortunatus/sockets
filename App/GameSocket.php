@@ -133,6 +133,12 @@ class GameSocket
                 $server->close($request->fd);
                 return;
             }
+            // In onOpen method, after getting player_id and game_id:
+            if ($player_id <= 0 || $game_id <= 0) {
+                echo "\nInvalid player or game ID";
+                $server->close($request->fd);
+                return;
+            }
             // Store connection in the shared table
             $this->connectionTable->set($request->fd, [
                 'game_id' => $game_id,
@@ -154,7 +160,6 @@ class GameSocket
                 'player_count' => count($connectedPlayers),
                 'player_id' => $player_id,
                 'game_id' => $game_id,
-                'live_games' => $this->getLiveGames()
             ]));
             // Broadcast to other players about the new connection
             $this->broadcastToGame($server, $game_id, [
@@ -165,13 +170,30 @@ class GameSocket
                 'connected_players' => $connectedPlayers,
                 'player_count' => count($connectedPlayers),
                 'message' => "New player {$player_id} connected",
-                'live_games' => $this->getLiveGames()
             ], $request->fd);
         } catch (PDOException $e) {
             echo "\nDatabase error during connection: " . $e->getMessage();
             $server->close($request->fd);
             return;
         }
+    }
+
+    public function getConnectedPlayers(int $game_id): array
+    {
+        if (!$this->playersTable->exists($game_id)) {
+            return [];
+        }
+
+        $players = $this->playersTable->get($game_id);
+        if (empty($players['player_ids']) || $players['player_ids'] === '') {
+            return [];
+        }
+
+        $playerIds = explode(',', $players['player_ids']);
+        // Filter out empty strings and convert to integers
+        return array_filter(array_map('intval', $playerIds), function ($id) {
+            return $id > 0; // Ensure we only return valid player IDs
+        });
     }
 
     private function addPlayerToGame(int $game_id, int $player_id): void
@@ -192,11 +214,17 @@ class GameSocket
             ]);
 
             $players = $this->playersTable->get($game_id);
-            $playerIds = explode(',', $players['player_ids']);
+            $playerIds = [];
+
+            if (!empty($players['player_ids'])) {
+                $playerIds = explode(',', $players['player_ids']);
+            }
+
+            // Add player if not already present
             if (!in_array($player_id, $playerIds)) {
                 $playerIds[] = $player_id;
                 $this->playersTable->set($game_id, [
-                    'player_ids' => implode(',', $playerIds)
+                    'player_ids' => implode(',', array_filter($playerIds)) // Filter empty values
                 ]);
             }
         }
@@ -206,27 +234,17 @@ class GameSocket
     {
         if ($this->playersTable->exists($game_id)) {
             $players = $this->playersTable->get($game_id);
-            $playerIds = explode(',', $players['player_ids']);
-            $playerIds = array_filter($playerIds, fn($id) => $id != $player_id);
+            if (!empty($players['player_ids'])) {
+                $playerIds = explode(',', $players['player_ids']);
+                $playerIds = array_filter($playerIds, function ($id) use ($player_id) {
+                    return $id != $player_id && $id !== '';
+                });
 
-            $this->playersTable->set($game_id, [
-                'player_ids' => implode(',', $playerIds)
-            ]);
+                $this->playersTable->set($game_id, [
+                    'player_ids' => implode(',', $playerIds)
+                ]);
+            }
         }
-    }
-
-    public function getConnectedPlayers(int $game_id): array
-    {
-        if (!$this->playersTable->exists($game_id)) {
-            return [];
-        }
-
-        $players = $this->playersTable->get($game_id);
-        if (empty($players['player_ids'])) {
-            return [];
-        }
-
-        return array_map('intval', explode(',', $players['player_ids']));
     }
 
     public function onMessage(Server $server, Frame $frame)
@@ -380,6 +398,16 @@ class GameSocket
 
     public function start()
     {
+        // Clean up inactive games every 60 seconds
+        $this->server->tick(60000, function () {
+            foreach ($this->gameTable as $game_id => $info) {
+                if ($info['player_count'] === 0) {
+                    $this->gameTable->del($game_id);
+                    $this->playersTable->del($game_id);
+                }
+            }
+        });
+
         echo "WebSocket server started on port 9002\n";
         $this->server->start();
     }
@@ -503,7 +531,6 @@ class GameSocket
                     "player_count" => $data['player_count'],
                     "player_id" => $data['player_id'],
                     "game_id" => $game_id,
-                    "live_games" => $data['live_games'] ?? $this->getLiveGames(),
                 ]));
             }
         }
