@@ -156,20 +156,18 @@ class GameSocket
                 'status' => 'notification',
                 'message' => "You have connected to game {$game_id}",
                 'action' => 'playerConnected',
-                'connected_players' => $connectedPlayers,
-                'player_count' => count($connectedPlayers),
-                'player_id' => $player_id,
-                'game_id' => $game_id,
+                'data' => [
+                    'player_id' => $player_id,
+                    'game_id' => $game_id,
+                    'connected_players' => $connectedPlayers,
+                    'player_count' => count($connectedPlayers),
+                ]
             ]));
             // Broadcast to other players about the new connection
             $this->broadcastToGame($server, $game_id, [
                 'action' => 'playerConnected',
                 'status' => 'notification',
                 'player_id' => $player_id,
-                'game_id' => $game_id,
-                'connected_players' => $connectedPlayers,
-                'player_count' => count($connectedPlayers),
-                'message' => "New player {$player_id} connected",
             ], $request->fd);
         } catch (PDOException $e) {
             echo "\nDatabase error during connection: " . $e->getMessage();
@@ -526,11 +524,14 @@ class GameSocket
                 $server->push($fd, json_encode([
                     "status" => $data['status'] ?? 'notification',
                     "message" => $message,
-                    "action" => $data['action'],
-                    "connected_players" => $data['connected_players'],
-                    "player_count" => $data['player_count'],
-                    "player_id" => $data['player_id'],
-                    "game_id" => $game_id,
+                    "action" => $data['action'] ?? 'unknown',
+                    "data" =>  [
+                        'player_id' =>  $player_id,
+                        'game_id' => $game_id,
+                        'connected_players' => $connectedPlayers,
+                        'player_count' => count($connectedPlayers),
+                        ...array_diff_key($data, array_flip(['status', 'message', 'action', 'player_id']))
+                    ],
                 ]));
             }
         }
